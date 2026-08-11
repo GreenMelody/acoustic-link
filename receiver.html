@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acoustic Link Receiver</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Receiver</h1>
+        <p>Listens for 16-FSK packets and decodes valid UTF-8 text after CRC verification.</p>
+      </div>
+      <nav class="nav">
+        <a class="button secondary" href="index.html">Home</a>
+        <a class="button secondary" href="sender.html">Sender</a>
+      </nav>
+    </header>
+
+    <section class="grid">
+      <div class="panel stack">
+        <h2>Listening</h2>
+        <div class="controls">
+          <button id="start">Start Listening</button>
+          <button id="stop" class="danger" disabled>Stop</button>
+        </div>
+        <label>
+          Band preset
+          <select id="band">
+            <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
+            <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
+            <option value="high">High: 8.0-19.25 kHz</option>
+          </select>
+        </label>
+        <label>
+          Detection threshold: <span id="thresholdLabel">120</span>
+          <input id="threshold" type="range" min="40" max="220" value="120">
+        </label>
+        <div class="status" id="status">Idle</div>
+        <div class="meter"><span id="level"></span></div>
+      </div>
+
+      <div class="panel stack">
+        <h2>Spectrum</h2>
+        <div class="bars" id="bars"></div>
+        <div class="readout">
+          <div class="metric">Tone<b id="tone">-</b></div>
+          <div class="metric">Score<b id="score">0</b></div>
+          <div class="metric">Packets<b id="packets">0</b></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid" style="margin-top:16px">
+      <div class="panel stack">
+        <h2>Received Text</h2>
+        <pre id="output"></pre>
+      </div>
+      <div class="panel stack">
+        <h2>Decoder Log</h2>
+        <pre id="log"></pre>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const bands = {
+      wide: { start: 3200, step: 1000 },
+      voice: { start: 1600, step: 1000 },
+      high: { start: 8000, step: 750 }
+    };
+    const sync = "0f0f0f0f0f0f0fa5a5";
+    const $ = (id) => document.getElementById(id);
+    const decoder = new TextDecoder();
+    let audioCtx;
+    let stream;
+    let analyser;
+    let data;
+    let raf;
+    let inTone = false;
+    let nibbles = "";
+    let packets = 0;
+
+    function crc16(bytes) {
+      let crc = 0xffff;
+      for (const byte of bytes) {
+        crc ^= byte << 8;
+        for (let i = 0; i < 8; i++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+      }
+      return crc;
+    }
+
+    function log(line, cls = "") {
+      const time = new Date().toLocaleTimeString();
+      $("log").textContent = `[${time}] ${line}\n` + $("log").textContent;
+      $("status").innerHTML = cls ? `<span class="${cls}">${line}</span>` : line;
+    }
+
+    function freqs() {
+      const band = bands[$("band").value];
+      return Array.from({ length: 16 }, (_, i) => band.start + band.step * i);
+    }
+
+    function readBin(freq) {
+      const bin = Math.round(freq / audioCtx.sampleRate * analyser.fftSize);
+      let total = 0;
+      let count = 0;
+      for (let i = Math.max(0, bin - 1); i <= Math.min(data.length - 1, bin + 1); i++) {
+        total += data[i];
+        count++;
+      }
+      return total / count;
+    }
+
+    function tryDecode() {
+      const syncAt = nibbles.indexOf(sync);
+      if (syncAt < 0) {
+        if (nibbles.length > 260) nibbles = nibbles.slice(-128);
+        return;
+      }
+
+      const body = nibbles.slice(syncAt + sync.length);
+      if (body.length < 8) return;
+      const bytes = [];
+      for (let i = 0; i + 1 < body.length; i += 2) bytes.push(parseInt(body.slice(i, i + 2), 16));
+      if (bytes.length < 4) return;
+
+      const len = (bytes[0] << 8) | bytes[1];
+      const total = 2 + len + 2;
+      if (bytes.length < total) return;
+
+      const packet = new Uint8Array(bytes.slice(0, total));
+      const bodyBytes = packet.slice(0, packet.length - 2);
+      const got = (packet[packet.length - 2] << 8) | packet[packet.length - 1];
+      const expected = crc16(bodyBytes);
+      nibbles = body.slice(total * 2);
+
+      if (got !== expected) {
+        log(`CRC failed: got ${got.toString(16)}, expected ${expected.toString(16)}`, "bad");
+        return;
+      }
+
+      const payload = packet.slice(2, 2 + len);
+      const text = decoder.decode(payload);
+      packets++;
+      $("packets").textContent = packets;
+      $("output").textContent = text + "\n\n" + $("output").textContent;
+      log(`Packet received: ${len} bytes`, "ok");
+    }
+
+    function drawBars(scores, active) {
+      const bars = $("bars").children;
+      scores.forEach((score, i) => {
+        bars[i].style.height = `${Math.max(4, score / 255 * 140)}px`;
+        bars[i].className = i === active ? "bar active" : "bar";
+      });
+    }
+
+    function tick() {
+      analyser.getByteFrequencyData(data);
+      const scores = freqs().map(readBin);
+      let best = 0;
+      for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+      const score = Math.round(scores[best]);
+      const threshold = Number($("threshold").value);
+      $("thresholdLabel").textContent = threshold;
+      $("tone").textContent = `${best.toString(16).toUpperCase()} / ${Math.round(freqs()[best])} Hz`;
+      $("score").textContent = score;
+      $("level").style.width = `${Math.min(100, score / 255 * 100)}%`;
+      drawBars(scores, best);
+
+      if (!inTone && score >= threshold) {
+        inTone = true;
+        nibbles += best.toString(16);
+        tryDecode();
+      } else if (inTone && score < threshold * 0.62) {
+        inTone = false;
+      }
+
+      raf = requestAnimationFrame(tick);
+    }
+
+    async function start() {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+      audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 8192;
+      analyser.smoothingTimeConstant = 0;
+      data = new Uint8Array(analyser.frequencyBinCount);
+      source.connect(analyser);
+      $("start").disabled = true;
+      $("stop").disabled = false;
+      log(`Listening at ${audioCtx.sampleRate} Hz`, "ok");
+      tick();
+    }
+
+    function stop() {
+      cancelAnimationFrame(raf);
+      if (stream) stream.getTracks().forEach((track) => track.stop());
+      if (audioCtx) audioCtx.close();
+      audioCtx = null;
+      stream = null;
+      $("start").disabled = false;
+      $("stop").disabled = true;
+      log("Stopped");
+    }
+
+    for (let i = 0; i < 16; i++) {
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      $("bars").appendChild(bar);
+    }
+    $("start").addEventListener("click", () => start().catch((err) => log(err.message, "bad")));
+    $("stop").addEventListener("click", stop);
+    $("band").addEventListener("change", () => {
+      nibbles = "";
+      inTone = false;
+      log("Band changed; decoder buffer cleared", "warn");
+    });
+    $("threshold").addEventListener("input", () => $("thresholdLabel").textContent = $("threshold").value);
+  </script>
+</body>
+</html>

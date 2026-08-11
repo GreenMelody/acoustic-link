@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acoustic Link Sender</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Sender</h1>
+        <p>Converts text into a 16-FSK audio packet. Use the same band preset on the receiver.</p>
+      </div>
+      <nav class="nav">
+        <a class="button secondary" href="index.html">Home</a>
+        <a class="button secondary" href="receiver.html">Receiver</a>
+      </nav>
+    </header>
+
+    <section class="grid">
+      <div class="panel stack">
+        <label>
+          Text to send
+          <textarea id="message">Hello from Acoustic Link</textarea>
+        </label>
+        <div class="controls">
+          <button id="send">Send</button>
+          <button id="stop" class="danger" disabled>Stop</button>
+        </div>
+      </div>
+
+      <div class="panel stack">
+        <h2>Signal</h2>
+        <label>
+          Band preset
+          <select id="band">
+            <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
+            <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
+            <option value="high">High: 8.0-19.25 kHz</option>
+          </select>
+        </label>
+        <label>
+          Tone length: <span id="toneLabel">55 ms</span>
+          <input id="toneMs" type="range" min="35" max="100" value="55">
+        </label>
+        <label>
+          Gap length: <span id="gapLabel">20 ms</span>
+          <input id="gapMs" type="range" min="8" max="45" value="20">
+        </label>
+        <label>
+          Volume: <span id="volumeLabel">35%</span>
+          <input id="volume" type="range" min="1" max="100" value="35">
+        </label>
+      </div>
+    </section>
+
+    <section class="panel stack" style="margin-top:16px">
+      <h2>Packet</h2>
+      <div class="readout">
+        <div class="metric">Bytes<b id="bytes">0</b></div>
+        <div class="metric">Symbols<b id="symbols">0</b></div>
+        <div class="metric">Duration<b id="duration">0 ms</b></div>
+      </div>
+      <pre id="packet"></pre>
+    </section>
+  </main>
+
+  <script>
+    const bands = {
+      wide: { start: 3200, step: 1000 },
+      voice: { start: 1600, step: 1000 },
+      high: { start: 8000, step: 750 }
+    };
+    const preamble = [0, 15, 0, 15, 0, 15, 0, 15, 0, 15, 0, 15, 10, 5, 10, 5];
+
+    const $ = (id) => document.getElementById(id);
+    const encoder = new TextEncoder();
+    let audioCtx;
+    let masterGain;
+    let playingUntil = 0;
+
+    function crc16(bytes) {
+      let crc = 0xffff;
+      for (const byte of bytes) {
+        crc ^= byte << 8;
+        for (let i = 0; i < 8; i++) crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
+      }
+      return crc;
+    }
+
+    function bytesToNibbles(bytes) {
+      const out = [];
+      for (const byte of bytes) out.push(byte >> 4, byte & 15);
+      return out;
+    }
+
+    function makePacket(text) {
+      const payload = encoder.encode(text);
+      if (payload.length > 65535) throw new Error("Message is too long.");
+      const body = new Uint8Array(2 + payload.length);
+      body[0] = payload.length >> 8;
+      body[1] = payload.length & 255;
+      body.set(payload, 2);
+      const crc = crc16(body);
+      const packet = new Uint8Array(body.length + 2);
+      packet.set(body, 0);
+      packet[packet.length - 2] = crc >> 8;
+      packet[packet.length - 1] = crc & 255;
+      return { payload, packet, symbols: [...preamble, ...bytesToNibbles(packet)] };
+    }
+
+    function freqForNibble(nibble) {
+      const band = bands[$("band").value];
+      return band.start + band.step * nibble;
+    }
+
+    function updatePreview() {
+      const toneMs = Number($("toneMs").value);
+      const gapMs = Number($("gapMs").value);
+      $("toneLabel").textContent = `${toneMs} ms`;
+      $("gapLabel").textContent = `${gapMs} ms`;
+      $("volumeLabel").textContent = `${$("volume").value}%`;
+      const { payload, packet, symbols } = makePacket($("message").value);
+      $("bytes").textContent = payload.length;
+      $("symbols").textContent = symbols.length;
+      $("duration").textContent = `${Math.round(symbols.length * (toneMs + gapMs))} ms`;
+      $("packet").textContent = Array.from(packet).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+    }
+
+    async function sendPacket() {
+      const toneMs = Number($("toneMs").value) / 1000;
+      const gapMs = Number($("gapMs").value) / 1000;
+      const volume = Number($("volume").value) / 100;
+      const { symbols } = makePacket($("message").value);
+
+      audioCtx ||= new AudioContext();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      masterGain ||= audioCtx.createGain();
+      masterGain.connect(audioCtx.destination);
+      masterGain.gain.setValueAtTime(volume, audioCtx.currentTime);
+
+      $("send").disabled = true;
+      $("stop").disabled = false;
+      let t = audioCtx.currentTime + 0.08;
+      playingUntil = t + symbols.length * (toneMs + gapMs);
+
+      for (const nibble of symbols) {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freqForNibble(nibble), t);
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(volume, t + 0.006);
+        gain.gain.setValueAtTime(volume, t + toneMs - 0.008);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + toneMs);
+        osc.connect(gain).connect(masterGain);
+        osc.start(t);
+        osc.stop(t + toneMs + 0.02);
+        t += toneMs + gapMs;
+      }
+
+      setTimeout(() => {
+        $("send").disabled = false;
+        $("stop").disabled = true;
+      }, Math.max(0, (playingUntil - audioCtx.currentTime) * 1000));
+    }
+
+    $("send").addEventListener("click", () => sendPacket().catch((err) => alert(err.message)));
+    $("stop").addEventListener("click", () => {
+      if (audioCtx) audioCtx.close();
+      audioCtx = null;
+      masterGain = null;
+      $("send").disabled = false;
+      $("stop").disabled = true;
+    });
+    ["message", "band", "toneMs", "gapMs", "volume"].forEach((id) => $(id).addEventListener("input", updatePreview));
+    updatePreview();
+  </script>
+</body>
+</html>
