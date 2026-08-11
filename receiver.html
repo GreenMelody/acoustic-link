@@ -35,8 +35,12 @@
           </select>
         </label>
         <label>
-          Detection threshold: <span id="thresholdLabel">120</span>
-          <input id="threshold" type="range" min="40" max="220" value="120">
+          Detection threshold: <span id="thresholdLabel">70</span>
+          <input id="threshold" type="range" min="25" max="180" value="70">
+        </label>
+        <label>
+          Symbol interval: <span id="intervalLabel">75 ms</span>
+          <input id="symbolInterval" type="range" min="50" max="140" value="75">
         </label>
         <div class="status" id="status">Idle</div>
         <div class="meter"><span id="level"></span></div>
@@ -61,6 +65,8 @@
       <div class="panel stack">
         <h2>Decoder Log</h2>
         <pre id="log"></pre>
+        <h2>Symbol Buffer</h2>
+        <pre id="buffer"></pre>
       </div>
     </section>
   </main>
@@ -79,9 +85,10 @@
     let analyser;
     let data;
     let raf;
-    let inTone = false;
     let nibbles = "";
     let packets = 0;
+    let lastSymbolAt = 0;
+    let lastSymbol = "";
 
     function crc16(bytes) {
       let crc = 0xffff;
@@ -118,10 +125,12 @@
       const syncAt = nibbles.indexOf(sync);
       if (syncAt < 0) {
         if (nibbles.length > 260) nibbles = nibbles.slice(-128);
+        $("buffer").textContent = nibbles.slice(-96);
         return;
       }
 
       const body = nibbles.slice(syncAt + sync.length);
+      $("buffer").textContent = nibbles.slice(Math.max(0, syncAt - 8), syncAt + sync.length + 96);
       if (body.length < 8) return;
       const bytes = [];
       for (let i = 0; i + 1 < body.length; i += 2) bytes.push(parseInt(body.slice(i, i + 2), 16));
@@ -165,18 +174,22 @@
       for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
       const score = Math.round(scores[best]);
       const threshold = Number($("threshold").value);
+      const symbolInterval = Number($("symbolInterval").value);
       $("thresholdLabel").textContent = threshold;
+      $("intervalLabel").textContent = `${symbolInterval} ms`;
       $("tone").textContent = `${best.toString(16).toUpperCase()} / ${Math.round(freqs()[best])} Hz`;
       $("score").textContent = score;
       $("level").style.width = `${Math.min(100, score / 255 * 100)}%`;
       drawBars(scores, best);
 
-      if (!inTone && score >= threshold) {
-        inTone = true;
-        nibbles += best.toString(16);
+      const now = performance.now();
+      if (score >= threshold && now - lastSymbolAt >= symbolInterval) {
+        lastSymbolAt = now;
+        lastSymbol = best.toString(16);
+        nibbles += lastSymbol;
         tryDecode();
-      } else if (inTone && score < threshold * 0.62) {
-        inTone = false;
+      } else if (score < threshold * 0.45) {
+        lastSymbolAt = 0;
       }
 
       raf = requestAnimationFrame(tick);
@@ -193,7 +206,7 @@
       audioCtx = new AudioContext();
       const source = audioCtx.createMediaStreamSource(stream);
       analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 8192;
+      analyser.fftSize = 4096;
       analyser.smoothingTimeConstant = 0;
       data = new Uint8Array(analyser.frequencyBinCount);
       source.connect(analyser);
@@ -223,10 +236,11 @@
     $("stop").addEventListener("click", stop);
     $("band").addEventListener("change", () => {
       nibbles = "";
-      inTone = false;
+      lastSymbolAt = 0;
       log("Band changed; decoder buffer cleared", "warn");
     });
     $("threshold").addEventListener("input", () => $("thresholdLabel").textContent = $("threshold").value);
+    $("symbolInterval").addEventListener("input", () => $("intervalLabel").textContent = `${$("symbolInterval").value} ms`);
   </script>
 </body>
 </html>
