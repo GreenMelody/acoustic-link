@@ -44,8 +44,8 @@
           <input id="threshold" type="range" min="25" max="180" value="70">
         </label>
         <label>
-          Symbol interval: <span id="intervalLabel">75 ms</span>
-          <input id="symbolInterval" type="range" min="25" max="140" value="75">
+          Symbol interval: <span id="intervalLabel">55 ms</span>
+          <input id="symbolInterval" type="range" min="25" max="140" value="55">
         </label>
         <div class="status" id="status">Idle</div>
         <div class="meter"><span id="level"></span></div>
@@ -91,6 +91,7 @@
       nearUltrasonic: { start: 18000, step: 140 }
     };
     const sync = "0f0f0f0f0f0fa5a5";
+    const maxPayloadBytes = 512;
     const $ = (id) => document.getElementById(id);
     const decoder = new TextDecoder();
     let audioCtx;
@@ -104,6 +105,7 @@
     let packets = 0;
     let lastSymbolAt = 0;
     let lastSymbol = "";
+    let signalWasLow = true;
     let noiseFloor = null;
 
     function crc16(bytes) {
@@ -144,22 +146,63 @@
       return { adjusted, ranked };
     }
 
+    function editDistanceWithin(a, b, limit) {
+      let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+      for (let i = 1; i <= a.length; i++) {
+        const curr = [i];
+        let best = curr[0];
+        for (let j = 1; j <= b.length; j++) {
+          const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+          const value = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+          curr[j] = value;
+          best = Math.min(best, value);
+        }
+        if (best > limit) return limit + 1;
+        prev = curr;
+      }
+      return prev[b.length];
+    }
+
+    function findSync() {
+      const exactAt = nibbles.indexOf(sync);
+      if (exactAt >= 0) return { at: exactAt, end: exactAt + sync.length, errors: 0 };
+
+      let best = null;
+      const minLen = sync.length - 2;
+      const maxLen = sync.length + 2;
+      for (let at = 0; at <= nibbles.length - minLen; at++) {
+        for (let len = minLen; len <= maxLen && at + len <= nibbles.length; len++) {
+          const errors = editDistanceWithin(nibbles.slice(at, at + len), sync, 2);
+          if (errors > 2) continue;
+          if (!best || errors < best.errors || (errors === best.errors && len < best.end - best.at)) {
+            best = { at, end: at + len, errors };
+          }
+        }
+      }
+      return best;
+    }
+
     function tryDecode() {
-      const syncAt = nibbles.indexOf(sync);
-      if (syncAt < 0) {
+      const match = findSync();
+      if (!match) {
         if (nibbles.length > 260) nibbles = nibbles.slice(-128);
         $("buffer").textContent = nibbles.slice(-96);
         return;
       }
 
-      const body = nibbles.slice(syncAt + sync.length);
-      $("buffer").textContent = nibbles.slice(Math.max(0, syncAt - 8), syncAt + sync.length + 96);
+      const body = nibbles.slice(match.end);
+      $("buffer").textContent = nibbles.slice(Math.max(0, match.at - 8), match.end + 96);
       if (body.length < 8) return;
       const bytes = [];
       for (let i = 0; i + 1 < body.length; i += 2) bytes.push(parseInt(body.slice(i, i + 2), 16));
       if (bytes.length < 4) return;
 
       const len = (bytes[0] << 8) | bytes[1];
+      if (len > maxPayloadBytes) {
+        nibbles = nibbles.slice(match.at + 1);
+        log(`Discarded invalid length: ${len} bytes`, "warn");
+        return;
+      }
       const total = 2 + len + 2;
       if (bytes.length < total) return;
 
@@ -179,7 +222,7 @@
       packets++;
       $("packets").textContent = packets;
       $("output").textContent = text + "\n\n" + $("output").textContent;
-      log(`Packet received: ${len} bytes`, "ok");
+      log(`Packet received: ${len} bytes${match.errors ? `, sync corrected ${match.errors}` : ""}`, "ok");
     }
 
     function drawBars(scores, active) {
@@ -223,13 +266,14 @@
 
       const now = performance.now();
       const strongEnough = score >= threshold && confidence >= Math.max(8, threshold * 0.25);
-      if (strongEnough && now - lastSymbolAt >= symbolInterval) {
+      if (strongEnough && (signalWasLow || now - lastSymbolAt >= symbolInterval)) {
         lastSymbolAt = now;
         lastSymbol = best.toString(16);
+        signalWasLow = false;
         nibbles += lastSymbol;
         tryDecode();
       } else if (score < threshold * 0.45) {
-        lastSymbolAt = 0;
+        signalWasLow = true;
         for (let i = 0; i < rawScores.length; i++) noiseFloor[i] = noiseFloor[i] * 0.96 + rawScores[i] * 0.04;
       }
 
@@ -284,6 +328,7 @@
     $("band").addEventListener("change", () => {
       nibbles = "";
       lastSymbolAt = 0;
+      signalWasLow = true;
       noiseFloor = null;
       log("Band changed; decoder buffer cleared", "warn");
     });
