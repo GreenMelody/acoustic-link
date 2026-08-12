@@ -17,9 +17,19 @@ It has two pages:
 
 For the first tests, keep the sender speaker or headphone close to the receiver microphone and start with moderate volume.
 
+## Frequency test
+
+Use this before choosing a quiet band:
+
+1. Open `receiver.html`, choose a band preset, and press **Frequency Test**.
+2. Open `sender.html`, choose the same band preset, and press **Frequency Test**.
+3. Check the receiver's frequency test table. Frequencies marked `OK` were detected with enough score and confidence.
+
+Start with `Lower quiet` or `Quiet` to avoid audible tones. If too few rows are marked `OK`, try `Mid quiet` or `High` before falling back to the audible diagnostic preset.
+
 ## Notes
 
-- The default mode uses 16-FSK across 3.2-18.2 kHz.
+- The default mode uses the lower quiet 16-FSK band across 14.0-17.75 kHz.
 - The audible diagnostic preset uses 16-FSK across 2.0-5.75 kHz to verify that the speaker-to-microphone path works.
 - The mid quiet preset uses 16-FSK across 12.0-15.75 kHz for debugging quiet high-frequency reception.
 - The lower quiet preset uses 16-FSK across 14.0-17.75 kHz for devices that cannot receive 16 kHz and above reliably.

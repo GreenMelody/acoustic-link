@@ -24,17 +24,19 @@
         <h2>Listening</h2>
         <div class="controls">
           <button id="start">Start Listening</button>
+          <button id="startTest" class="secondary">Frequency Test</button>
+          <button id="stopTest" class="secondary" disabled>Stop Test</button>
           <button id="stop" class="danger" disabled>Stop</button>
         </div>
         <label>
           Band preset
           <select id="band">
             <option value="audibleDiag">Audible diagnostic: 2.0-5.75 kHz</option>
-            <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
+            <option value="wide">Wide: 3.2-18.2 kHz</option>
             <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
             <option value="midQuiet">Mid quiet: 12.0-15.75 kHz</option>
             <option value="high">High: 8.0-19.25 kHz</option>
-            <option value="lowerQuiet">Lower quiet: 14.0-17.75 kHz</option>
+            <option value="lowerQuiet" selected>Lower quiet: 14.0-17.75 kHz</option>
             <option value="quiet">Quiet: 16.0-19.75 kHz</option>
             <option value="nearUltrasonic">Near inaudible: 18.0-20.1 kHz</option>
           </select>
@@ -62,6 +64,8 @@
           <div class="metric">Mic<b id="mic">0</b></div>
           <div class="metric">Packets<b id="packets">0</b></div>
         </div>
+        <h2>Frequency Test</h2>
+        <pre id="testResults"></pre>
       </div>
     </section>
 
@@ -107,6 +111,7 @@
     let lastSymbol = "";
     let signalWasLow = true;
     let noiseFloor = null;
+    let frequencyTest = null;
 
     function crc16(bytes) {
       let crc = 0xffff;
@@ -144,6 +149,59 @@
       const adjusted = rawScores.map((score, i) => Math.max(0, score - noiseFloor[i]));
       const ranked = adjusted.map((score, index) => ({ score, index })).sort((a, b) => b.score - a.score);
       return { adjusted, ranked };
+    }
+
+    function emptyFrequencyResults() {
+      return freqs().map((freq, nibble) => ({
+        nibble,
+        freq,
+        maxScore: 0,
+        maxConfidence: 0,
+        hits: 0
+      }));
+    }
+
+    function renderFrequencyResults() {
+      const results = frequencyTest?.results || emptyFrequencyResults();
+      $("testResults").textContent = results.map((row) => {
+        const ok = row.maxScore >= Number($("threshold").value) && row.maxConfidence >= Math.max(8, Number($("threshold").value) * 0.25);
+        const mark = ok ? "OK" : "--";
+        return `${row.nibble.toString(16).toUpperCase()}  ${Math.round(row.freq).toString().padStart(5, " ")} Hz  score ${Math.round(row.maxScore).toString().padStart(3, " ")}  conf ${Math.round(row.maxConfidence).toString().padStart(3, " ")}  hits ${row.hits.toString().padStart(2, " ")}  ${mark}`;
+      }).join("\n");
+    }
+
+    function beginFrequencyTest() {
+      nibbles = "";
+      lastSymbolAt = 0;
+      signalWasLow = true;
+      frequencyTest = {
+        endsAt: performance.now() + 12000,
+        results: emptyFrequencyResults()
+      };
+      $("startTest").disabled = true;
+      $("stopTest").disabled = false;
+      renderFrequencyResults();
+      log("Frequency test running for 12 seconds", "warn");
+    }
+
+    function stopFrequencyTest(finished = false) {
+      if (!frequencyTest) return;
+      renderFrequencyResults();
+      frequencyTest = null;
+      $("startTest").disabled = false;
+      $("stopTest").disabled = true;
+      log(finished ? "Frequency test complete" : "Frequency test stopped", finished ? "ok" : "warn");
+    }
+
+    function recordFrequencyTest(scores, best, confidence) {
+      if (!frequencyTest) return;
+      scores.forEach((score, i) => {
+        frequencyTest.results[i].maxScore = Math.max(frequencyTest.results[i].maxScore, score);
+      });
+      frequencyTest.results[best].maxConfidence = Math.max(frequencyTest.results[best].maxConfidence, confidence);
+      frequencyTest.results[best].hits++;
+      renderFrequencyResults();
+      if (performance.now() >= frequencyTest.endsAt) stopFrequencyTest(true);
     }
 
     function editDistanceWithin(a, b, limit) {
@@ -266,6 +324,11 @@
 
       const now = performance.now();
       const strongEnough = score >= threshold && confidence >= Math.max(8, threshold * 0.25);
+      if (frequencyTest) {
+        recordFrequencyTest(scores, best, confidence);
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       if (strongEnough && (signalWasLow || now - lastSymbolAt >= symbolInterval)) {
         lastSymbolAt = now;
         lastSymbol = best.toString(16);
@@ -301,6 +364,7 @@
       source.connect(analyser);
       $("start").disabled = true;
       $("stop").disabled = false;
+      $("startTest").disabled = false;
       const track = stream.getAudioTracks()[0];
       log(`Listening at ${audioCtx.sampleRate} Hz; mic ${track?.readyState || "unknown"}${track?.muted ? ", muted" : ""}`, "ok");
       tick();
@@ -315,6 +379,8 @@
       source = null;
       $("start").disabled = false;
       $("stop").disabled = true;
+      stopFrequencyTest(false);
+      $("startTest").disabled = false;
       log("Stopped");
     }
 
@@ -323,13 +389,25 @@
       bar.className = "bar";
       $("bars").appendChild(bar);
     }
+    renderFrequencyResults();
     $("start").addEventListener("click", () => start().catch((err) => log(err.message, "bad")));
+    $("startTest").addEventListener("click", async () => {
+      try {
+        if (!audioCtx) await start();
+        beginFrequencyTest();
+      } catch (err) {
+        log(err.message, "bad");
+      }
+    });
+    $("stopTest").addEventListener("click", () => stopFrequencyTest(false));
     $("stop").addEventListener("click", stop);
     $("band").addEventListener("change", () => {
       nibbles = "";
       lastSymbolAt = 0;
       signalWasLow = true;
       noiseFloor = null;
+      stopFrequencyTest(false);
+      renderFrequencyResults();
       log("Band changed; decoder buffer cleared", "warn");
     });
     $("threshold").addEventListener("input", () => $("thresholdLabel").textContent = $("threshold").value);

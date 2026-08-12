@@ -37,11 +37,11 @@
           Band preset
           <select id="band">
             <option value="audibleDiag">Audible diagnostic: 2.0-5.75 kHz</option>
-            <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
+            <option value="wide">Wide: 3.2-18.2 kHz</option>
             <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
             <option value="midQuiet">Mid quiet: 12.0-15.75 kHz</option>
             <option value="high">High: 8.0-19.25 kHz</option>
-            <option value="lowerQuiet">Lower quiet: 14.0-17.75 kHz</option>
+            <option value="lowerQuiet" selected>Lower quiet: 14.0-17.75 kHz</option>
             <option value="quiet">Quiet: 16.0-19.75 kHz</option>
             <option value="nearUltrasonic">Near inaudible: 18.0-20.1 kHz</option>
           </select>
@@ -58,6 +58,9 @@
           Volume: <span id="volumeLabel">35%</span>
           <input id="volume" type="range" min="1" max="100" value="35">
         </label>
+        <div class="controls">
+          <button id="test" class="secondary">Frequency Test</button>
+        </div>
       </div>
     </section>
 
@@ -69,6 +72,8 @@
         <div class="metric">Duration<b id="duration">0 ms</b></div>
       </div>
       <pre id="packet"></pre>
+      <h2>Frequency Test</h2>
+      <pre id="testPlan"></pre>
     </section>
   </main>
 
@@ -89,7 +94,9 @@
     const encoder = new TextEncoder();
     let audioCtx;
     let masterGain;
+    let masterConnected = false;
     let playingUntil = 0;
+    let finishTimer;
 
     function crc16(bytes) {
       let crc = 0xffff;
@@ -104,6 +111,11 @@
       const out = [];
       for (const byte of bytes) out.push(byte >> 4, byte & 15);
       return out;
+    }
+
+    function freqs() {
+      const band = bands[$("band").value];
+      return Array.from({ length: 16 }, (_, i) => band.start + band.step * i);
     }
 
     function makePacket(text) {
@@ -122,8 +134,7 @@
     }
 
     function freqForNibble(nibble) {
-      const band = bands[$("band").value];
-      return band.start + band.step * nibble;
+      return freqs()[nibble];
     }
 
     function updatePreview() {
@@ -137,6 +148,60 @@
       $("symbols").textContent = symbols.length;
       $("duration").textContent = `${Math.round(symbols.length * (toneMs + gapMs))} ms`;
       $("packet").textContent = Array.from(packet).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+      $("testPlan").textContent = freqs().map((freq, i) => `${i.toString(16).toUpperCase()}: ${Math.round(freq)} Hz`).join("\n");
+    }
+
+    async function ensureAudio(volume) {
+      audioCtx ||= new AudioContext();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      masterGain ||= audioCtx.createGain();
+      if (!masterConnected) {
+        masterGain.connect(audioCtx.destination);
+        masterConnected = true;
+      }
+      masterGain.gain.setValueAtTime(volume, audioCtx.currentTime);
+    }
+
+    function setPlaying(isPlaying) {
+      $("send").disabled = true;
+      $("test").disabled = true;
+      $("stop").disabled = false;
+      if (!isPlaying) {
+        $("send").disabled = false;
+        $("test").disabled = false;
+        $("stop").disabled = true;
+      }
+    }
+
+    function scheduleTone(freq, t, toneMs, volume) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(volume, t + Math.min(0.006, toneMs * 0.25));
+      gain.gain.setValueAtTime(volume, t + Math.max(0, toneMs - 0.008));
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + toneMs);
+      osc.connect(gain).connect(masterGain);
+      osc.start(t);
+      osc.stop(t + toneMs + 0.02);
+    }
+
+    async function playTones(tones, toneMs, gapMs, volume) {
+      await ensureAudio(volume);
+      clearTimeout(finishTimer);
+      setPlaying(true);
+      let t = audioCtx.currentTime + 0.08;
+      playingUntil = t + tones.length * (toneMs + gapMs);
+
+      for (const tone of tones) {
+        scheduleTone(tone.freq, t, toneMs, volume);
+        t += toneMs + gapMs;
+      }
+
+      finishTimer = setTimeout(() => {
+        setPlaying(false);
+      }, Math.max(0, (playingUntil - audioCtx.currentTime) * 1000));
     }
 
     async function sendPacket() {
@@ -144,46 +209,25 @@
       const gapMs = Number($("gapMs").value) / 1000;
       const volume = Number($("volume").value) / 100;
       const { symbols } = makePacket($("message").value);
+      await playTones(symbols.map((nibble) => ({ freq: freqForNibble(nibble) })), toneMs, gapMs, volume);
+    }
 
-      audioCtx ||= new AudioContext();
-      if (audioCtx.state === "suspended") await audioCtx.resume();
-      masterGain ||= audioCtx.createGain();
-      masterGain.connect(audioCtx.destination);
-      masterGain.gain.setValueAtTime(volume, audioCtx.currentTime);
-
-      $("send").disabled = true;
-      $("stop").disabled = false;
-      let t = audioCtx.currentTime + 0.08;
-      playingUntil = t + symbols.length * (toneMs + gapMs);
-
-      for (const nibble of symbols) {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(freqForNibble(nibble), t);
-        gain.gain.setValueAtTime(0.0001, t);
-        gain.gain.exponentialRampToValueAtTime(volume, t + 0.006);
-        gain.gain.setValueAtTime(volume, t + toneMs - 0.008);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t + toneMs);
-        osc.connect(gain).connect(masterGain);
-        osc.start(t);
-        osc.stop(t + toneMs + 0.02);
-        t += toneMs + gapMs;
-      }
-
-      setTimeout(() => {
-        $("send").disabled = false;
-        $("stop").disabled = true;
-      }, Math.max(0, (playingUntil - audioCtx.currentTime) * 1000));
+    async function runFrequencyTest() {
+      const volume = Number($("volume").value) / 100;
+      const tones = freqs().map((freq, nibble) => ({ freq, nibble }));
+      $("testPlan").textContent = tones.map((tone) => `${tone.nibble.toString(16).toUpperCase()}: ${Math.round(tone.freq)} Hz, 450 ms`).join("\n");
+      await playTones(tones, 0.45, 0.15, volume);
     }
 
     $("send").addEventListener("click", () => sendPacket().catch((err) => alert(err.message)));
+    $("test").addEventListener("click", () => runFrequencyTest().catch((err) => alert(err.message)));
     $("stop").addEventListener("click", () => {
+      clearTimeout(finishTimer);
       if (audioCtx) audioCtx.close();
       audioCtx = null;
       masterGain = null;
-      $("send").disabled = false;
-      $("stop").disabled = true;
+      masterConnected = false;
+      setPlaying(false);
     });
     ["message", "band", "toneMs", "gapMs", "volume"].forEach((id) => $(id).addEventListener("input", updatePreview));
     updatePreview();
