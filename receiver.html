@@ -31,6 +31,7 @@
           <select id="band">
             <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
             <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
+            <option value="midQuiet">Mid quiet: 12.0-15.75 kHz</option>
             <option value="high">High: 8.0-19.25 kHz</option>
             <option value="lowerQuiet">Lower quiet: 14.0-17.75 kHz</option>
             <option value="quiet">Quiet: 16.0-19.75 kHz</option>
@@ -54,6 +55,7 @@
         <div class="bars" id="bars"></div>
         <div class="readout">
           <div class="metric">Tone<b id="tone">-</b></div>
+          <div class="metric">Peak<b id="peak">-</b></div>
           <div class="metric">Score<b id="score">0</b></div>
           <div class="metric">Mic<b id="mic">0</b></div>
           <div class="metric">Packets<b id="packets">0</b></div>
@@ -79,6 +81,7 @@
     const bands = {
       wide: { start: 3200, step: 1000 },
       voice: { start: 1600, step: 1000 },
+      midQuiet: { start: 12000, step: 250 },
       high: { start: 8000, step: 750 },
       lowerQuiet: { start: 14000, step: 250 },
       quiet: { start: 16000, step: 250 },
@@ -186,6 +189,10 @@
       }
       const micLevel = Math.round(Math.sqrt(sum / timeData.length));
       const scores = freqs().map(readBin);
+      let peakBin = 0;
+      for (let i = 1; i < data.length; i++) if (data[i] > data[peakBin]) peakBin = i;
+      const peakFreq = Math.round(peakBin * audioCtx.sampleRate / analyser.fftSize);
+      const peakScore = data[peakBin];
       let best = 0;
       for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
       const score = Math.round(scores[best]);
@@ -194,6 +201,7 @@
       $("thresholdLabel").textContent = threshold;
       $("intervalLabel").textContent = `${symbolInterval} ms`;
       $("tone").textContent = `${best.toString(16).toUpperCase()} / ${Math.round(freqs()[best])} Hz`;
+      $("peak").textContent = `${peakFreq} Hz / ${peakScore}`;
       $("score").textContent = score;
       $("mic").textContent = micLevel;
       $("level").style.width = `${Math.min(100, score / 255 * 100)}%`;
@@ -225,6 +233,8 @@
       source = audioCtx.createMediaStreamSource(stream);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 4096;
+      analyser.minDecibels = -120;
+      analyser.maxDecibels = -20;
       analyser.smoothingTimeConstant = 0;
       data = new Uint8Array(analyser.frequencyBinCount);
       timeData = new Uint8Array(analyser.fftSize);
