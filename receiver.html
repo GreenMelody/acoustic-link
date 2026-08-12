@@ -32,6 +32,7 @@
             <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
             <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
             <option value="high">High: 8.0-19.25 kHz</option>
+            <option value="nearUltrasonic">Near inaudible: 18.0-20.1 kHz</option>
           </select>
         </label>
         <label>
@@ -75,7 +76,8 @@
     const bands = {
       wide: { start: 3200, step: 1000 },
       voice: { start: 1600, step: 1000 },
-      high: { start: 8000, step: 750 }
+      high: { start: 8000, step: 750 },
+      nearUltrasonic: { start: 18000, step: 140 }
     };
     const sync = "0f0f0f0f0f0fa5a5";
     const $ = (id) => document.getElementById(id);
