@@ -20,6 +20,7 @@ For the first tests, keep the sender speaker or headphone close to the receiver 
 ## Notes
 
 - The default mode uses 16-FSK across 3.2-18.2 kHz.
+- The lower quiet preset uses 16-FSK across 14.0-17.75 kHz for devices that cannot receive 16 kHz and above reliably.
 - The quiet preset uses 16-FSK across 16.0-19.75 kHz as a balance between audibility and reliability.
 - The near-inaudible preset uses 16-FSK across 18.0-20.1 kHz. It is quieter but less reliable on many phones.
 - Packets contain a preamble, length, UTF-8 payload, and CRC16.
