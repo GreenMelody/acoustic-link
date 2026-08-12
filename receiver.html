@@ -55,6 +55,7 @@
         <div class="readout">
           <div class="metric">Tone<b id="tone">-</b></div>
           <div class="metric">Score<b id="score">0</b></div>
+          <div class="metric">Mic<b id="mic">0</b></div>
           <div class="metric">Packets<b id="packets">0</b></div>
         </div>
       </div>
@@ -88,8 +89,10 @@
     const decoder = new TextDecoder();
     let audioCtx;
     let stream;
+    let source;
     let analyser;
     let data;
+    let timeData;
     let raf;
     let nibbles = "";
     let packets = 0;
@@ -175,6 +178,13 @@
 
     function tick() {
       analyser.getByteFrequencyData(data);
+      analyser.getByteTimeDomainData(timeData);
+      let sum = 0;
+      for (const sample of timeData) {
+        const centered = sample - 128;
+        sum += centered * centered;
+      }
+      const micLevel = Math.round(Math.sqrt(sum / timeData.length));
       const scores = freqs().map(readBin);
       let best = 0;
       for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
@@ -185,6 +195,7 @@
       $("intervalLabel").textContent = `${symbolInterval} ms`;
       $("tone").textContent = `${best.toString(16).toUpperCase()} / ${Math.round(freqs()[best])} Hz`;
       $("score").textContent = score;
+      $("mic").textContent = micLevel;
       $("level").style.width = `${Math.min(100, score / 255 * 100)}%`;
       drawBars(scores, best);
 
@@ -210,15 +221,18 @@
         }
       });
       audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+      source = audioCtx.createMediaStreamSource(stream);
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 4096;
       analyser.smoothingTimeConstant = 0;
       data = new Uint8Array(analyser.frequencyBinCount);
+      timeData = new Uint8Array(analyser.fftSize);
       source.connect(analyser);
       $("start").disabled = true;
       $("stop").disabled = false;
-      log(`Listening at ${audioCtx.sampleRate} Hz`, "ok");
+      const track = stream.getAudioTracks()[0];
+      log(`Listening at ${audioCtx.sampleRate} Hz; mic ${track?.readyState || "unknown"}${track?.muted ? ", muted" : ""}`, "ok");
       tick();
     }
 
@@ -228,6 +242,7 @@
       if (audioCtx) audioCtx.close();
       audioCtx = null;
       stream = null;
+      source = null;
       $("start").disabled = false;
       $("stop").disabled = true;
       log("Stopped");
