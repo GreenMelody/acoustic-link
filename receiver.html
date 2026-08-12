@@ -58,6 +58,7 @@
           <div class="metric">Tone<b id="tone">-</b></div>
           <div class="metric">Peak<b id="peak">-</b></div>
           <div class="metric">Score<b id="score">0</b></div>
+          <div class="metric">Confidence<b id="confidence">0</b></div>
           <div class="metric">Mic<b id="mic">0</b></div>
           <div class="metric">Packets<b id="packets">0</b></div>
         </div>
@@ -103,6 +104,7 @@
     let packets = 0;
     let lastSymbolAt = 0;
     let lastSymbol = "";
+    let noiseFloor = null;
 
     function crc16(bytes) {
       let crc = 0xffff;
@@ -133,6 +135,13 @@
         count++;
       }
       return total / count;
+    }
+
+    function rankedScores(rawScores) {
+      if (!noiseFloor) noiseFloor = rawScores.slice();
+      const adjusted = rawScores.map((score, i) => Math.max(0, score - noiseFloor[i]));
+      const ranked = adjusted.map((score, index) => ({ score, index })).sort((a, b) => b.score - a.score);
+      return { adjusted, ranked };
     }
 
     function tryDecode() {
@@ -190,14 +199,16 @@
         sum += centered * centered;
       }
       const micLevel = Math.round(Math.sqrt(sum / timeData.length));
-      const scores = freqs().map(readBin);
+      const rawScores = freqs().map(readBin);
+      const { adjusted: scores, ranked } = rankedScores(rawScores);
       let peakBin = 0;
       for (let i = 1; i < data.length; i++) if (data[i] > data[peakBin]) peakBin = i;
       const peakFreq = Math.round(peakBin * audioCtx.sampleRate / analyser.fftSize);
       const peakScore = data[peakBin];
-      let best = 0;
-      for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+      const best = ranked[0].index;
+      const secondScore = ranked[1]?.score || 0;
       const score = Math.round(scores[best]);
+      const confidence = Math.round(score - secondScore);
       const threshold = Number($("threshold").value);
       const symbolInterval = Number($("symbolInterval").value);
       $("thresholdLabel").textContent = threshold;
@@ -205,18 +216,21 @@
       $("tone").textContent = `${best.toString(16).toUpperCase()} / ${Math.round(freqs()[best])} Hz`;
       $("peak").textContent = `${peakFreq} Hz / ${peakScore}`;
       $("score").textContent = score;
+      $("confidence").textContent = confidence;
       $("mic").textContent = micLevel;
       $("level").style.width = `${Math.min(100, score / 255 * 100)}%`;
       drawBars(scores, best);
 
       const now = performance.now();
-      if (score >= threshold && now - lastSymbolAt >= symbolInterval) {
+      const strongEnough = score >= threshold && confidence >= Math.max(8, threshold * 0.25);
+      if (strongEnough && now - lastSymbolAt >= symbolInterval) {
         lastSymbolAt = now;
         lastSymbol = best.toString(16);
         nibbles += lastSymbol;
         tryDecode();
       } else if (score < threshold * 0.45) {
         lastSymbolAt = 0;
+        for (let i = 0; i < rawScores.length; i++) noiseFloor[i] = noiseFloor[i] * 0.96 + rawScores[i] * 0.04;
       }
 
       raf = requestAnimationFrame(tick);
@@ -270,6 +284,7 @@
     $("band").addEventListener("change", () => {
       nibbles = "";
       lastSymbolAt = 0;
+      noiseFloor = null;
       log("Band changed; decoder buffer cleared", "warn");
     });
     $("threshold").addEventListener("input", () => $("thresholdLabel").textContent = $("threshold").value);
