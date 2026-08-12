@@ -20,6 +20,7 @@ For the first tests, keep the sender speaker or headphone close to the receiver 
 ## Notes
 
 - The default mode uses 16-FSK across 3.2-18.2 kHz.
+- The audible diagnostic preset uses 16-FSK across 2.0-5.75 kHz to verify that the speaker-to-microphone path works.
 - The mid quiet preset uses 16-FSK across 12.0-15.75 kHz for debugging quiet high-frequency reception.
 - The lower quiet preset uses 16-FSK across 14.0-17.75 kHz for devices that cannot receive 16 kHz and above reliably.
 - The quiet preset uses 16-FSK across 16.0-19.75 kHz as a balance between audibility and reliability.

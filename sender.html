@@ -36,6 +36,7 @@
         <label>
           Band preset
           <select id="band">
+            <option value="audibleDiag">Audible diagnostic: 2.0-5.75 kHz</option>
             <option value="wide" selected>Wide: 3.2-18.2 kHz</option>
             <option value="voice">Voice-safe test: 1.6-16.6 kHz</option>
             <option value="midQuiet">Mid quiet: 12.0-15.75 kHz</option>
@@ -73,6 +74,7 @@
 
   <script>
     const bands = {
+      audibleDiag: { start: 2000, step: 250 },
       wide: { start: 3200, step: 1000 },
       voice: { start: 1600, step: 1000 },
       midQuiet: { start: 12000, step: 250 },
