@@ -23,7 +23,7 @@ Use this before choosing a quiet band:
 
 1. Open `receiver.html`, choose a band preset, and press **Frequency Test**.
 2. Open `sender.html`, choose the same band preset, and press **Frequency Test**.
-3. Check the receiver's frequency test table. Frequencies marked `OK` were detected with enough score and confidence.
+3. Check the receiver's frequency test table. Frequencies marked `OK` had at least one detection above the current score and confidence thresholds.
 
 Start with `Lower quiet` or `Quiet` to avoid audible tones. If too few rows are marked `OK`, try `Mid quiet` or `High` before falling back to the audible diagnostic preset.
 

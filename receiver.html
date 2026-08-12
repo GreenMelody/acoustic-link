@@ -157,16 +157,16 @@
         freq,
         maxScore: 0,
         maxConfidence: 0,
-        hits: 0
+        detections: 0
       }));
     }
 
     function renderFrequencyResults() {
       const results = frequencyTest?.results || emptyFrequencyResults();
       $("testResults").textContent = results.map((row) => {
-        const ok = row.maxScore >= Number($("threshold").value) && row.maxConfidence >= Math.max(8, Number($("threshold").value) * 0.25);
+        const ok = row.detections > 0;
         const mark = ok ? "OK" : "--";
-        return `${row.nibble.toString(16).toUpperCase()}  ${Math.round(row.freq).toString().padStart(5, " ")} Hz  score ${Math.round(row.maxScore).toString().padStart(3, " ")}  conf ${Math.round(row.maxConfidence).toString().padStart(3, " ")}  hits ${row.hits.toString().padStart(2, " ")}  ${mark}`;
+        return `${row.nibble.toString(16).toUpperCase()}  ${Math.round(row.freq).toString().padStart(5, " ")} Hz  score ${Math.round(row.maxScore).toString().padStart(3, " ")}  conf ${Math.round(row.maxConfidence).toString().padStart(3, " ")}  detections ${row.detections.toString().padStart(2, " ")}  ${mark}`;
       }).join("\n");
     }
 
@@ -193,13 +193,15 @@
       log(finished ? "Frequency test complete" : "Frequency test stopped", finished ? "ok" : "warn");
     }
 
-    function recordFrequencyTest(scores, best, confidence) {
+    function recordFrequencyTest(scores, best, confidence, strongEnough) {
       if (!frequencyTest) return;
       scores.forEach((score, i) => {
         frequencyTest.results[i].maxScore = Math.max(frequencyTest.results[i].maxScore, score);
       });
-      frequencyTest.results[best].maxConfidence = Math.max(frequencyTest.results[best].maxConfidence, confidence);
-      frequencyTest.results[best].hits++;
+      if (strongEnough) {
+        frequencyTest.results[best].maxConfidence = Math.max(frequencyTest.results[best].maxConfidence, confidence);
+        frequencyTest.results[best].detections++;
+      }
       renderFrequencyResults();
       if (performance.now() >= frequencyTest.endsAt) stopFrequencyTest(true);
     }
@@ -325,7 +327,7 @@
       const now = performance.now();
       const strongEnough = score >= threshold && confidence >= Math.max(8, threshold * 0.25);
       if (frequencyTest) {
-        recordFrequencyTest(scores, best, confidence);
+        recordFrequencyTest(scores, best, confidence, strongEnough);
         raf = requestAnimationFrame(tick);
         return;
       }
