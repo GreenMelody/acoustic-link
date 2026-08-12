@@ -27,4 +27,5 @@ For the first tests, keep the sender speaker or headphone close to the receiver 
 - The near-inaudible preset uses 16-FSK across 18.0-20.1 kHz. It is quieter but less reliable on many phones.
 - Packets contain a preamble, length, UTF-8 payload, and CRC16.
 - The receiver uses browser microphone input and FFT analysis.
+- Shorter symbols are possible. Start with 55 ms tone + 20 ms gap, then try 30 ms tone + 10 ms gap with a 40 ms receiver interval.
 - HTTPS is required for microphone access on phones, so GitHub Pages is a good hosting target.

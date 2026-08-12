@@ -45,7 +45,7 @@
         </label>
         <label>
           Symbol interval: <span id="intervalLabel">75 ms</span>
-          <input id="symbolInterval" type="range" min="50" max="140" value="75">
+          <input id="symbolInterval" type="range" min="25" max="140" value="75">
         </label>
         <div class="status" id="status">Idle</div>
         <div class="meter"><span id="level"></span></div>
@@ -234,7 +234,7 @@
       if (audioCtx.state === "suspended") await audioCtx.resume();
       source = audioCtx.createMediaStreamSource(stream);
       analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 4096;
+      analyser.fftSize = 2048;
       analyser.minDecibels = -120;
       analyser.maxDecibels = -20;
       analyser.smoothingTimeConstant = 0;
